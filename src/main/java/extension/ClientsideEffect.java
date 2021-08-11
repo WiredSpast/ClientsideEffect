@@ -86,8 +86,9 @@ public class ClientsideEffect extends ExtensionForm {
     }
 
     private void fetchEffects() {
-        String effectsMapUrl = "https://images.habbo.com/gordon/PRODUCTION-202107011209-606458337/effectmap.xml";
+        String gitUrl = "https://raw.githubusercontent.com/WiredSpast/ClientsideEffect/master/latesteffectmapurl.txt";
         try {
+            String effectsMapUrl = IOUtils.toString(new URL(gitUrl).openStream(), StandardCharsets.UTF_8);
             String xml = IOUtils.toString(new URL(effectsMapUrl).openStream(), StandardCharsets.UTF_8);
             JSONObject effectsJson = XML.toJSONObject(xml);
             System.out.println(effectsJson.toString(4));
