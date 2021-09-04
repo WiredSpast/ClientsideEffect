@@ -1,120 +1,76 @@
 package extension;
 
 import gearth.extensions.ExtensionForm;
-import gearth.extensions.ExtensionFormLauncher;
 import gearth.extensions.ExtensionInfo;
-import gearth.extensions.extra.tools.PacketInfoSupport;
 import gearth.extensions.parsers.HEntity;
 import gearth.extensions.parsers.HEntityType;
 import gearth.protocol.HMessage;
 import gearth.protocol.HPacket;
-import gearth.ui.GEarthController;
 import javafx.application.Platform;
 import javafx.event.ActionEvent;
-import javafx.fxml.FXMLLoader;
-import javafx.scene.Parent;
-import javafx.scene.Scene;
 import javafx.scene.control.ChoiceBox;
-import javafx.scene.image.Image;
-import javafx.stage.Stage;
-import org.apache.commons.io.IOUtils;
-import org.json.JSONObject;
-import org.json.XML;
-
-import java.net.URL;
-import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.stream.Collectors;
+
+import gordon.EffectMap;
 
 @ExtensionInfo(
         Title =         "Clientside Effects",
         Description =   "Make any user effect appear clientside",
-        Version =       "0.1",
+        Version =       "0.2",
         Author =        "WiredSpast"
 )
 public class ClientsideEffect extends ExtensionForm {
     // FX-Components
     public ChoiceBox<User> usersBox;
     public ChoiceBox<Effect> effectsBox;
-    private PacketInfoSupport packetInfoSupport;
-
-    public static void main(String[] args) {
-        ExtensionFormLauncher.trigger(ClientsideEffect.class, args);
-    }
-
-    @Override
-    public ExtensionForm launchForm(Stage stage) throws Exception {
-        FXMLLoader loader = new FXMLLoader(ClientsideEffect.class.getClassLoader().getResource("fxml/clientsideeffect.fxml"));
-        Parent root = loader.load();
-
-        stage.setTitle("Clientside Effect");
-        stage.setScene(new Scene(root));
-        stage.getScene().getStylesheets().add(Objects.requireNonNull(GEarthController.class.getResource("/gearth/ui/bootstrap3.css")).toExternalForm());
-        stage.getIcons().add(new Image(Objects.requireNonNull(this.getClass().getResource("/images/duck_icon.png")).openStream()));
-
-        stage.setResizable(false);
-
-        return loader.getController();
-    }
 
     @Override
     protected void initExtension() {
-        packetInfoSupport = new PacketInfoSupport(this);
-
-        packetInfoSupport.intercept(HMessage.Direction.TOCLIENT, "OpenConnection", this::clearUsers);
-
-        packetInfoSupport.intercept(HMessage.Direction.TOCLIENT, "CloseConnection", this::clearUsers);
-
-        packetInfoSupport.intercept(HMessage.Direction.TOCLIENT, "Users", hMessage -> {
-            User[] users = User.parse(hMessage.getPacket());
-            Platform.runLater(() -> {
-                usersBox.getItems().addAll(Arrays.stream(users).filter(user -> user.getEntityType() != HEntityType.PET).collect(Collectors.toList()));
-                usersBox.getItems().sorted();
-            });
-        });
-
-        packetInfoSupport.intercept(HMessage.Direction.TOCLIENT, "UserRemove", hMessage -> {
-            int index = Integer.parseInt(hMessage.getPacket().readString());
-            Platform.runLater(() -> usersBox.getItems().removeIf(user -> user.getIndex() == index));
-        });
+        intercept(HMessage.Direction.TOCLIENT, "OpenConnection", this::onOpenOrCloseConnection);
+        intercept(HMessage.Direction.TOCLIENT, "CloseConnection", this::onOpenOrCloseConnection);
+        intercept(HMessage.Direction.TOCLIENT, "Users", this::onUsers);
+        intercept(HMessage.Direction.TOCLIENT, "UserRemove", this::onUserRemove);
 
         fetchEffects();
     }
 
-    private void clearUsers(HMessage hMessage) {
+    private void onOpenOrCloseConnection(HMessage hMessage) {
         Platform.runLater(() -> usersBox.getItems().clear());
     }
 
-    private void fetchEffects() {
-        String gitUrl = "https://raw.githubusercontent.com/WiredSpast/ClientsideEffect/master/latesteffectmapurl.txt";
-        try {
-            String effectsMapUrl = IOUtils.toString(new URL(gitUrl).openStream(), StandardCharsets.UTF_8);
-            String xml = IOUtils.toString(new URL(effectsMapUrl).openStream(), StandardCharsets.UTF_8);
-            JSONObject effectsJson = XML.toJSONObject(xml);
-            System.out.println(effectsJson.toString(4));
-            Platform.runLater(() -> {
-                effectsBox.getItems().add(null);
-                List<Effect> effects = effectsJson.getJSONObject("map").getJSONArray("effect")
-                        .toList().stream()
-                        .map(o -> (Map<String, Object>) o)
-                        .filter(effect -> effect.get("type").equals("fx"))
-                        .map(effect -> new Effect((Integer) effect.get("id"), (String) effect.get("lib")))
-                        .sorted(Comparator.comparing(effect -> effect.toString().toLowerCase()))
-                        .collect(Collectors.toList());
-                effectsBox.getItems().addAll(effects);
-            });
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
+    private void onUsers(HMessage hMessage) {
+        User[] users = User.parse(hMessage.getPacket());
+        Platform.runLater(() -> {
+            usersBox.getItems().addAll(Arrays.stream(users).filter(user -> user.getEntityType() != HEntityType.PET).collect(Collectors.toList()));
+            usersBox.getItems().sorted();
+        });
+    }
 
+    private void onUserRemove(HMessage hMessage) {
+        int index = Integer.parseInt(hMessage.getPacket().readString());
+        Platform.runLater(() -> usersBox.getItems().removeIf(user -> user.getIndex() == index));
+    }
+
+    private void fetchEffects() {
+        new Thread(() -> {
+            List<Effect> effects = EffectMap.getAllEffects()
+                    .stream()
+                    .filter(effect -> effect.type.equals("fx"))
+                    .map(Effect::new)
+                    .collect(Collectors.toList());
+
+            effectsBox.getItems().addAll(effects);
+            sendToClient(new HPacket("{in:NotificationDialog}{s:\"\"}{i:3}{s:\"display\"}{s:\"BUBBLE\"}{s:\"message\"}{s:\"Clientside Effect: Effectmap loaded!\"}{s:\"image\"}{s:\"https://raw.githubusercontent.com/WiredSpast/G-ExtensionStore/repo/1.5/store/extensions/Clientside%20Effect/icon.png\"}"));
+        }).start();
     }
 
     public void onSetButton(ActionEvent actionEvent) {
         if(usersBox.getValue() != null) {
             if(effectsBox.getValue() == null) {
-                this.packetInfoSupport.sendToClient("AvatarEffect", usersBox.getValue().getIndex(), 0, 0);
+                sendToClient(new HPacket("AvatarEffect", HMessage.Direction.TOCLIENT, usersBox.getValue().getIndex(), 0, 0));
             } else {
-                this.packetInfoSupport.sendToClient("AvatarEffect", usersBox.getValue().getIndex(), effectsBox.getValue().id, 0);
+                sendToClient(new HPacket("AvatarEffect", HMessage.Direction.TOCLIENT, usersBox.getValue().getIndex(), effectsBox.getValue().id, 0));
             }
         }
     }
@@ -153,9 +109,9 @@ public class ClientsideEffect extends ExtensionForm {
         public final int id;
         public final String name;
 
-        public Effect(int id, String name) {
-            this.id = id;
-            this.name = name;
+        public Effect(EffectMap.Effect effect) {
+            this.id = Integer.parseInt(effect.id);
+            this.name = effect.name;
         }
 
         @Override
